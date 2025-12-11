@@ -67,7 +67,7 @@ pub fn ensure_self_signed_certificate(
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>(),
-    );
+    )?;
     params.distinguished_name = DistinguishedName::new();
 
     let cert = Certificate::from_params(params)?;
