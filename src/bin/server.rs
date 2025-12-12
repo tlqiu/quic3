@@ -1,13 +1,13 @@
 use anyhow::Result;
 use clap::Parser;
-use quic3::{ensure_self_signed_certificate, sanitize_file_name, try_decode_header, FileHeader};
+use quic3::{FileHeader, ensure_self_signed_certificate, sanitize_file_name, try_decode_header};
 use s2n_quic::Server;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::{self, File};
 use tokio::io::AsyncWriteExt;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -39,29 +39,31 @@ async fn main() -> Result<()> {
 
     fs::create_dir_all(&args.output).await?;
     let output_dir = Arc::new(args.output);
-    let (cert_path, key_path) = ensure_self_signed_certificate(
-        &args.cert,
-        &args.key,
-        &["localhost", "127.0.0.1"],
-    )?;
+    let (cert_path, key_path) =
+        ensure_self_signed_certificate(&args.cert, &args.key, &["localhost", "127.0.0.1"])?;
 
     let mut server = Server::builder()
-        .with_tls((cert_path, key_path))?
+        .with_tls((cert_path.as_path(), key_path.as_path()))?
         .with_io(args.addr)?
-        .start()
-        .await?;
+        .start()?;
 
     println!("Server listening on {}", args.addr);
 
-    while let Some(connection) = server.accept().await {
+    while let Some(mut connection) = server.accept().await {
         let output_dir = Arc::clone(&output_dir);
         tokio::spawn(async move {
-            if let Ok(mut connection) = connection.await {
-                println!("Accepted connection from {}", connection.remote_addr());
-                while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
-                    let output_dir = Arc::clone(&output_dir);
-                    tokio::spawn(handle_stream(stream, connection.remote_addr(), output_dir));
+            let remote_addr = match connection.remote_addr() {
+                Ok(addr) => addr,
+                Err(err) => {
+                    eprintln!("Failed to read peer address: {err}");
+                    return;
                 }
+            };
+
+            println!("Accepted connection from {remote_addr}");
+            while let Ok(Some(stream)) = connection.accept_bidirectional_stream().await {
+                let output_dir = Arc::clone(&output_dir);
+                tokio::spawn(handle_stream(stream, remote_addr, output_dir));
             }
         });
     }
@@ -101,7 +103,8 @@ async fn handle_stream(
 
     let safe_name = sanitize_file_name(&header.file_name);
     let target_path = output_dir.join(safe_name);
-    if let Err(err) = receive_file(stream, target_path, header, buffer, consumed, remote_addr).await {
+    if let Err(err) = receive_file(stream, target_path, header, buffer, consumed, remote_addr).await
+    {
         eprintln!("[{remote_addr}] failed to store file: {err}");
     }
 }
@@ -110,7 +113,7 @@ async fn receive_file(
     mut stream: s2n_quic::stream::BidirectionalStream,
     target_path: PathBuf,
     header: FileHeader,
-    mut buffer: Vec<u8>,
+    buffer: Vec<u8>,
     consumed: usize,
     remote_addr: SocketAddr,
 ) -> Result<()> {
@@ -140,9 +143,7 @@ async fn receive_file(
     } else {
         eprintln!(
             "[{remote_addr}] warning: expected {} bytes for '{}' but wrote {}",
-            header.file_size,
-            header.file_name,
-            written
+            header.file_size, header.file_name, written
         );
     }
 
