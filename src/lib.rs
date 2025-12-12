@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rcgen::{Certificate, CertificateParams, DistinguishedName};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,13 @@ pub fn try_decode_header(buf: &[u8]) -> Option<(FileHeader, usize)> {
 
     let name_bytes = &buf[HEADER_PREFIX_LEN..HEADER_PREFIX_LEN + name_len];
     let file_name = String::from_utf8_lossy(name_bytes).to_string();
-    Some((FileHeader { file_name, file_size }, HEADER_PREFIX_LEN + name_len))
+    Some((
+        FileHeader {
+            file_name,
+            file_size,
+        },
+        HEADER_PREFIX_LEN + name_len,
+    ))
 }
 
 /// Ensure a self-signed certificate exists at the given locations, creating it if needed.
@@ -67,7 +73,7 @@ pub fn ensure_self_signed_certificate(
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>(),
-    )?;
+    );
     params.distinguished_name = DistinguishedName::new();
 
     let cert = Certificate::from_params(params)?;

@@ -1,12 +1,13 @@
 use anyhow::Result;
+use bytes::Bytes;
 use clap::Parser;
 use quic3::encode_header;
-use s2n_quic::client::Client;
+use s2n_quic::client::{Client, Connect};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, BufReader};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -50,23 +51,21 @@ async fn main() -> Result<()> {
 
     let header = encode_header(&file_name, metadata.len())?;
 
-    let mut client = Client::builder()
-        .with_tls(args.ca_cert.clone())?
+    let client = Client::builder()
+        .with_tls(args.ca_cert.as_path())?
         .with_io("0.0.0.0:0")?
-        .start()
-        .await?;
+        .start()?;
 
     println!(
         "Connecting to {} with server name '{}'...",
         args.server, args.server_name
     );
 
-    let mut connection = client
-        .connect(args.server, args.server_name.clone())?
-        .await?;
+    let connect = Connect::new(args.server).with_server_name(args.server_name.clone());
+    let mut connection = client.connect(connect).await?;
 
     let mut stream = connection.open_bidirectional_stream().await?;
-    stream.send(header).await?;
+    stream.send(Bytes::from(header)).await?;
 
     let mut reader = BufReader::new(fs::File::open(&args.file).await?);
     let mut buffer = vec![0u8; 64 * 1024];
@@ -78,12 +77,17 @@ async fn main() -> Result<()> {
             break;
         }
 
-        stream.send(&buffer[..bytes_read]).await?;
+        stream
+            .send(Bytes::copy_from_slice(&buffer[..bytes_read]))
+            .await?;
         total_sent += bytes_read as u64;
     }
 
     stream.close().await?;
-    println!("Sent '{}' ({} bytes) to {}", file_name, total_sent, args.server);
+    println!(
+        "Sent '{}' ({} bytes) to {}",
+        file_name, total_sent, args.server
+    );
 
     Ok(())
 }
